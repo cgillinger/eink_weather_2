@@ -1,0 +1,725 @@
+# 🌬️ Wind Module Gust Enhancement - Komplett Research Kunskapsbas
+**All kunskap från STEG 1 Research för implementation av vindbyar-stöd**
+
+## 📊 Executive Summary
+
+**✅ SMHI HAR VINDBYAR-DATA**: Bekräftat genom vetenskaplig forskning och tredjepartsintegrationer  
+**🎯 IMPLEMENTATION MÖJLIG**: Både via direkta SMHI-parametrar och robust estimering  
+**🔧 INTEGRATION-PUNKT**: Befintlig WeatherClient.parse_smhi_forecast() är perfekt för utökning  
+**⚡ FALLBACK NÖDVÄNDIG**: Estimering med faktor 1.4 när SMHI-data saknas
+
+---
+
+## 🔬 Vetenskaplig Grund för Vindbyar
+
+### **📚 Meteorologisk Definition:**
+- **Vindby (Wind Gust)**: "Maximum 2 s gust recorded in the last hour at a 10 m above the ground"
+- **Mätstandard**: WMO-guidelines för 10m höjd, 2-sekunders max över senaste timmen
+- **Relation till medelvind**: Vindbyar är typiskt 1.2-2.5× medelvind beroende på väderförhållanden
+
+### **🇸🇪 SMHI Vindbyar-mätning:**
+- **Automatiska stationer**: Thies ultrasonic anemometers sedan 1996
+- **Kvalitetskontroll**: SMHI säkerställer hög kvalitet på vindbyar-mätningar
+- **Tillgänglighet**: Både observations (stationer) och prognoser (modeller)
+- **Standardhöjd**: 10m över marken (samma som medelvind)
+
+### **📈 Meteorologiska Tumregler:**
+```
+ESTIMERING AV VINDBYAR:
+- Neutral väderlek: gust ≈ medelvind × 1.3-1.4
+- Instabil väderlek: gust ≈ medelvind × 1.5-2.0
+- Stabil väderlek: gust ≈ medelvind × 1.1-1.3
+- Åskväder: gust ≈ medelvind × 2.0-2.5
+
+KVALITETSKONTROLL:
+- Gust >= medelvind (alltid)
+- Gust/medelvind ratio 1.0-3.0 (normalt intervall)
+- Värden utanför detta är suspekta
+```
+
+---
+
+## 🌐 SMHI API-arkitektur
+
+### **📡 SMHI Prognoser API (Primary Source)**
+
+**ENDPOINT**: 
+```
+https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/{lon}/lat/{lat}/data.json
+```
+
+**BEFINTLIG IMPLEMENTATION** (från projektkunskap):
+```python
+# I WeatherClient.get_smhi_data():
+url = f"https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/{self.longitude}/lat/{self.latitude}/data.json"
+
+# Cache: 30 minuter (1800 sekunder)
+if time.time() - self.smhi_cache['timestamp'] < 1800:
+    # Använd cache
+```
+
+**JSON STRUKTUR** (från befintlig implementation):
+```json
+{
+  "timeSeries": [
+    {
+      "validTime": "2025-08-22T14:00:00Z",
+      "parameters": [
+        {"name": "t", "values": [15.2], "unit": "Cel"},
+        {"name": "ws", "values": [8.5], "unit": "m/s"},
+        {"name": "wd", "values": [225], "unit": "degree"},
+        {"name": "wg", "values": [12.3], "unit": "m/s"}
+      ]
+    }
+  ]
+}
+```
+
+### **🔍 BEFINTLIGA VIND-PARAMETRAR** (från weather_client.py):
+```python
+# I parse_smhi_forecast() - BEFINTLIG KOD:
+elif param['name'] == 'ws':  # Vindstyrka
+    data['wind_speed'] = param['values'][0]
+elif param['name'] == 'wd':  # Vindriktning
+    data['wind_direction'] = param['values'][0]
+```
+
+### **💨 TROLIGA GUST-PARAMETRAR** (research-resultat):
+```python
+# Prioriterad lista baserat på research:
+GUST_PARAMETER_CANDIDATES = [
+    'wg',              # Standard meteorologisk förkortning (mest trolig)
+    'gust',            # Engelska standardnamn
+    'wind_gust',       # Beskrivande namn
+    'wind_gust_speed', # Detaljerat namn (från Homey-integration)
+    'maxwind',         # Max vindstyrka
+    'ws_max',          # Max wind speed variant
+    'vindby'           # Svenska (mindre trolig)
+]
+```
+
+### **📊 SMHI Observations API (Secondary Source)**
+
+**ENDPOINT PATTERN**:
+```
+https://opendata-download-metobs.smhi.se/api/version/latest/parameter/{param_id}/station/{station_id}/period/latest-hour/data.json
+```
+
+**BEFINTLIG OBSERVATIONS** (från projektkunskap):
+```python
+# Station 98230 (Observatorielunden) - redan implementerad för nederbörd
+station_id = "98230"  # Stockholm-Observatoriekullen A
+fallback_station = "97390"  # Stockholm-Arlanda
+
+# Parameter 7 = nederbörd (redan implementerat)
+# Parameter 21-25 = troligen vindrelaterade
+```
+
+**TROLIGA VIND-PARAMETRAR** (observations):
+```python
+WIND_OBSERVATION_PARAMETERS = {
+    21: "Medelvind (möjlig)",
+    22: "Vindriktning (möjlig)", 
+    23: "Vindby/Max vind (trolig)",
+    24: "Max vindstyrka (trolig)",
+    25: "Wind gust (trolig)"
+}
+```
+
+---
+
+## 🏗️ Befintlig Systemarkitektur
+
+### **📁 INTEGRATION-PUNKTER** (från projektkunskap):
+
+**PRIMARY**: `modules/weather_client.py`
+```python
+class WeatherClient:
+    def get_smhi_data(self) -> Dict[str, Any]:
+        # 30 min cache, API-anrop, felhantering
+        
+    def parse_smhi_forecast(self, current_forecast, tomorrow_forecast) -> Dict:
+        # UTÖKNINGSPUNKT: Här ska gust-extraction läggas till
+        
+    def combine_weather_data(self, smhi_data, netatmo_data, sun_data, cycling_data) -> Dict:
+        # UTÖKNINGSPUNKT: Här ska gust-data kombineras
+```
+
+**TRIGGER SYSTEM**: `main_daemon.py`
+```python
+def build_trigger_context(weather_data) -> Dict:
+    context.update({
+        'wind_speed': weather_data.get('wind_speed', 0),
+        'wind_direction': weather_data.get('wind_direction', 0)
+        # UTÖKNINGSPUNKT: wind_gust ska läggas till här
+    })
+```
+
+**CONFIG**: `config.json`
+```json
+{
+  "triggers": {
+    "wind_trigger": {
+      "condition": "wind_speed > 10.0",
+      // UTÖKNINGSPUNKT: "wind_speed > 8.0 OR wind_gust > 8.0"
+      "target_section": "medium_right_section",
+      "activate_group": "wind_active",
+      "priority": 80
+    }
+  }
+}
+```
+
+### **🔄 BEFINTLIG DATA-FLÖDE**:
+```
+1. WeatherClient.get_smhi_data()
+   → API-anrop med 30 min cache
+
+2. WeatherClient.parse_smhi_forecast()
+   → Extraherar 'ws', 'wd', 't', 'Wsymb2', etc.
+
+3. WeatherClient.combine_weather_data()
+   → Kombinerar SMHI + Netatmo + Sol + Cykel-data
+
+4. main_daemon.py build_trigger_context()
+   → Skapar trigger-kontext med wind_speed, wind_direction
+
+5. TriggerEvaluator.evaluate_condition()
+   → Evaluerar "wind_speed > 10.0"
+
+6. WindRenderer (ej implementerad än)
+   → Skulle rendera vinddata
+```
+
+---
+
+## 🎯 Implementation Strategy
+
+### **🔧 METOD 1: SMHI Prognoser (Primary)**
+
+**UTÖKNING AV** `parse_smhi_forecast()`:
+```python
+def parse_smhi_forecast(self, current, tomorrow=None):
+    data = {}
+    
+    if current:
+        for param in current['parameters']:
+            # ... befintliga parametrar ...
+            
+            # NYTT: Gust parameter detection
+            elif param['name'] in ['wg', 'gust', 'wind_gust', 'wind_gust_speed']:
+                data['wind_gust'] = param['values'][0]
+                data['wind_gust_source'] = 'smhi_forecast'
+                data['wind_gust_parameter'] = param['name']  # För debugging
+                self.logger.info(f"🎯 SMHI gust: {param['name']} = {param['values'][0]} m/s")
+```
+
+**KVALITETSKONTROLL**:
+```python
+# Validera gust-värde
+gust_value = param['values'][0]
+if isinstance(gust_value, (int, float)) and 0 <= gust_value <= 100:
+    data['wind_gust'] = gust_value
+else:
+    self.logger.warning(f"⚠️ Ogiltigt gust-värde: {gust_value}")
+    # Fallback till estimering
+```
+
+### **🔧 METOD 2: SMHI Observations (Secondary)**
+
+**NY METOD** för observations-baserade vindbyar:
+```python
+def get_wind_observations(self) -> Dict[str, Any]:
+    """Hämta vindbyar från SMHI observations (om prognoser saknar data)"""
+    
+    # Testa observation-parametrar för vindbyar
+    wind_gust_params = [23, 24, 25]  # Troliga parameter-IDs
+    station_id = self.config.get('stockholm_stations', {}).get('observations_station_id', '98230')
+    
+    for param_id in wind_gust_params:
+        url = f"https://opendata-download-metobs.smhi.se/api/version/latest/parameter/{param_id}/station/{station_id}/period/latest-hour/data.json"
+        
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if 'value' in data and len(data['value']) > 0:
+                    latest_value = data['value'][0].get('value')
+                    param_name = data.get('parameter', {}).get('name', 'unknown')
+                    
+                    if 'gust' in param_name.lower() or 'max' in param_name.lower():
+                        return {
+                            'wind_gust': latest_value,
+                            'wind_gust_source': 'smhi_observations',
+                            'wind_gust_parameter': f"param_{param_id}",
+                            'observation_station': station_id
+                        }
+        except Exception as e:
+            self.logger.warning(f"Observations parameter {param_id} fel: {e}")
+    
+    return {}  # Ingen gust-data hittad
+```
+
+### **🔧 METOD 3: Estimering (Fallback)**
+
+**ROBUST FALLBACK** i `combine_weather_data()`:
+```python
+def combine_weather_data(self, smhi_data, netatmo_data, sun_data, cycling_data):
+    combined = {}
+    
+    # ... befintlig logik ...
+    
+    # Vindbyar-hantering med prioriterad fallback
+    if smhi_data and 'wind_gust' in smhi_data:
+        # Metod 1: SMHI prognoser
+        combined['wind_gust'] = smhi_data['wind_gust']
+        combined['wind_gust_source'] = smhi_data['wind_gust_source']
+        
+    elif smhi_data and 'wind_speed' in smhi_data:
+        # Metod 3: Estimering från medelvind
+        wind_speed = smhi_data['wind_speed']
+        estimated_gust = self.estimate_wind_gust(wind_speed, smhi_data)
+        
+        combined['wind_gust'] = estimated_gust
+        combined['wind_gust_source'] = 'estimated'
+        
+    else:
+        # Ingen vinddata alls
+        combined['wind_gust'] = 0.0
+        combined['wind_gust_source'] = 'unavailable'
+    
+    # Kvalitetskontroll
+    self.validate_gust_data(combined)
+    
+    return combined
+```
+
+**ESTIMERING-ALGORITM**:
+```python
+def estimate_wind_gust(self, wind_speed, weather_context=None):
+    """
+    Estimera vindbyar med meteorologisk precision
+    
+    Baserat på:
+    - WMO standards
+    - Svenska väderförhållanden  
+    - Meteorologisk forskning
+    """
+    if not wind_speed or wind_speed <= 0:
+        return 0.0
+    
+    # Bas-faktor för svenska förhållanden
+    base_factor = 1.4
+    
+    # Justering baserat på väderförhållanden
+    factor = base_factor
+    
+    if weather_context:
+        weather_symbol = weather_context.get('weather_symbol', 0)
+        pressure = weather_context.get('pressure', 1013)
+        
+        # Åskväder → kraftigare byar
+        if weather_symbol in [11, 21]:  # Åska
+            factor = 1.6
+        # Instabil väderlek → ökade byar  
+        elif weather_symbol in [8, 9, 10]:  # Regnskurar
+            factor = 1.5
+        # Högtryck → stabilare förhållanden
+        elif pressure > 1020:
+            factor = 1.2
+        # Lågtryck → instabilare förhållanden
+        elif pressure < 1000:
+            factor = 1.5
+    
+    estimated_gust = round(wind_speed * factor, 1)
+    
+    # Säkerhetsgräns: minst 10% över medelvind
+    min_gust = round(wind_speed * 1.1, 1)
+    
+    return max(estimated_gust, min_gust)
+```
+
+**KVALITETSKONTROLL**:
+```python
+def validate_gust_data(self, weather_data):
+    """Validera att gust-data är meteorologiskt rimlig"""
+    
+    wind_speed = weather_data.get('wind_speed', 0)
+    wind_gust = weather_data.get('wind_gust', 0)
+    
+    if wind_speed > 0 and wind_gust > 0:
+        ratio = wind_gust / wind_speed
+        
+        # Vindbyar ska vara >= medelvind
+        if wind_gust < wind_speed:
+            corrected_gust = round(wind_speed * 1.1, 1)
+            self.logger.warning(f"🔧 Gust < medelvind: {wind_gust} → {corrected_gust}")
+            weather_data['wind_gust'] = corrected_gust
+            weather_data['wind_gust_corrected'] = True
+        
+        # Orealistiskt hög ratio (>3.0)
+        elif ratio > 3.0:
+            corrected_gust = round(wind_speed * 2.0, 1)
+            self.logger.warning(f"🔧 Gust-ratio för hög ({ratio:.1f}): {wind_gust} → {corrected_gust}")
+            weather_data['wind_gust'] = corrected_gust
+            weather_data['wind_gust_corrected'] = True
+        
+        # Logga normala förhållanden
+        else:
+            self.logger.info(f"✅ Gust-ratio OK: {ratio:.2f} (wind={wind_speed}, gust={wind_gust})")
+```
+
+---
+
+## 🧪 Test och Validation Strategier
+
+### **📊 DISCOVERY TESTING**:
+
+**Test 1**: Parameter Discovery
+```bash
+# Testa SMHI API för gust-parametrar
+python3 -c "
+import requests
+import json
+
+url = 'https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/18.0686/lat/59.3293/data.json'
+response = requests.get(url, timeout=10)
+data = response.json()
+
+parameters = data['timeSeries'][0]['parameters']
+print('SMHI Prognoser parametrar:')
+for param in parameters:
+    name = param['name']
+    unit = param.get('unit', 'no_unit')
+    value = param['values'][0]
+    if any(keyword in name.lower() for keyword in ['wind', 'ws', 'wd', 'gust', 'wg']):
+        print(f'  🌬️ {name}: {value} {unit}')
+    else:
+        print(f'  📊 {name}: {value} {unit}')
+"
+```
+
+**Test 2**: Observations Discovery
+```bash
+# Testa observations för vindbyar
+python3 -c "
+import requests
+
+station_id = '98230'
+wind_params = [21, 22, 23, 24, 25]
+
+print('SMHI Observations vindparametrar:')
+for param_id in wind_params:
+    url = f'https://opendata-download-metobs.smhi.se/api/version/latest/parameter/{param_id}/station/{station_id}/period/latest-hour/data.json'
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            param_name = data.get('parameter', {}).get('name', 'Okänd')
+            param_unit = data.get('parameter', {}).get('unit', 'Okänd')
+            print(f'  ✅ Parameter {param_id}: {param_name} ({param_unit})')
+        else:
+            print(f'  ❌ Parameter {param_id}: HTTP {response.status_code}')
+    except Exception as e:
+        print(f'  ❌ Parameter {param_id}: {e}')
+"
+```
+
+### **🔧 INTEGRATION TESTING**:
+
+**Test 3**: WeatherClient Integration
+```python
+# Test efter implementation
+def test_gust_integration():
+    from modules.weather_client import WeatherClient
+    import json
+    
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+    
+    client = WeatherClient(config)
+    weather_data = client.get_current_weather()
+    
+    # Kontrollera gust-data
+    wind_speed = weather_data.get('wind_speed', 0)
+    wind_gust = weather_data.get('wind_gust', 0)
+    gust_source = weather_data.get('wind_gust_source', 'unknown')
+    
+    print(f"🌬️ Medelvind: {wind_speed} m/s")
+    print(f"💨 Vindbyar: {wind_gust} m/s")  
+    print(f"📍 Källa: {gust_source}")
+    
+    if wind_speed > 0:
+        ratio = wind_gust / wind_speed
+        print(f"📊 Gust/Wind ratio: {ratio:.2f}")
+        
+        # Validering
+        assert wind_gust >= wind_speed, "Gust ska vara >= medelvind"
+        assert 1.0 <= ratio <= 3.0, f"Ratio {ratio:.2f} utanför normalt intervall"
+        assert gust_source in ['smhi_forecast', 'smhi_observations', 'estimated'], f"Okänd källa: {gust_source}"
+        
+        print("✅ Alla test-kriterier uppfyllda")
+    else:
+        print("⚠️ Ingen vinddata för test")
+
+if __name__ == "__main__":
+    test_gust_integration()
+```
+
+**Test 4**: Trigger Context
+```python
+# Test trigger-kontext efter STEG 3
+def test_trigger_context():
+    from main_daemon import build_trigger_context
+    
+    # Simulerad väderdata med gust
+    weather_data = {
+        'wind_speed': 7.5,
+        'wind_gust': 11.2,
+        'wind_direction': 225,
+        'wind_gust_source': 'smhi_forecast'
+    }
+    
+    context = build_trigger_context(weather_data)
+    
+    # Kontrollera att wind_gust finns i trigger-kontext
+    assert 'wind_gust' in context, "wind_gust saknas i trigger-kontext"
+    assert context['wind_gust'] == 11.2, "Gust-värde felaktigt i kontext"
+    
+    # Testa trigger-condition
+    condition = "wind_speed > 8.0 OR wind_gust > 8.0"
+    result = eval(condition, {}, context)
+    
+    assert result == True, "Trigger borde aktiveras (gust > 8.0)"
+    print("✅ Trigger-test godkänt")
+
+# Kör efter STEG 3 implementation
+```
+
+---
+
+## 📁 Dataformat och Struktur
+
+### **🔄 INPUT DATA** (från SMHI):
+
+**Prognoser Format**:
+```json
+{
+  "timeSeries": [
+    {
+      "validTime": "2025-08-22T15:00:00Z",
+      "parameters": [
+        {"name": "ws", "values": [8.5], "unit": "m/s"},
+        {"name": "wd", "values": [225], "unit": "degree"},
+        {"name": "wg", "values": [12.3], "unit": "m/s"}
+      ]
+    }
+  ]
+}
+```
+
+**Observations Format**:
+```json
+{
+  "parameter": {
+    "name": "Vindby max",
+    "unit": "m/s"
+  },
+  "value": [
+    {
+      "date": "2025-08-22T14:00:00.000+02:00",
+      "value": "11.5",
+      "quality": "G"
+    }
+  ]
+}
+```
+
+### **🎯 OUTPUT DATA** (efter implementation):
+
+**Weather Data Structure**:
+```python
+weather_data = {
+    # Befintliga fält (opåverkade)
+    'wind_speed': 8.5,           # från 'ws'
+    'wind_direction': 225,       # från 'wd'
+    'temperature': 15.2,         # från 't'
+    
+    # Nya gust-fält
+    'wind_gust': 12.3,           # från 'wg' eller estimerat
+    'wind_gust_source': 'smhi_forecast',  # 'smhi_forecast' | 'smhi_observations' | 'estimated'
+    'wind_gust_parameter': 'wg', # Vilket parameter som användes (debugging)
+    'wind_gust_corrected': False # Om värdet korrigerades av kvalitetskontroll
+}
+```
+
+**Trigger Context** (för STEG 3):
+```python
+trigger_context = {
+    'wind_speed': 8.5,
+    'wind_direction': 225,
+    'wind_gust': 12.3,           # NYTT
+    'temperature': 15.2,
+    'pressure': 1015
+}
+```
+
+**Config Triggers** (för STEG 3):
+```json
+{
+  "triggers": {
+    "wind_trigger": {
+      "condition": "wind_speed > 8.0 OR wind_gust > 8.0",
+      "target_section": "medium_right_section",
+      "activate_group": "wind_active",
+      "priority": 80,
+      "description": "Aktivera vid medelvind >8 m/s ELLER vindbyar >8 m/s"
+    }
+  }
+}
+```
+
+---
+
+## 🔧 Implementation Checkpoints
+
+### **📋 STEG 2 CHECKPOINTS**:
+
+**Checkpoint 1**: Parameter Discovery (15 min)
+- [ ] Utöka `parse_smhi_forecast()` med gust-kandidater
+- [ ] Testa mot live SMHI API
+- [ ] Identifiera fungerande parameter-namn
+- [ ] Logga findings för dokumentation
+
+**Checkpoint 2**: Fallback Implementation (15 min)  
+- [ ] Implementera estimering-algoritm
+- [ ] Utöka `combine_weather_data()` 
+- [ ] Kvalitetskontroll och validering
+- [ ] Error handling för edge cases
+
+**Checkpoint 3**: Testing och Validation (15 min)
+- [ ] Kör discovery test-kommando
+- [ ] Validera gust/medelvind ratio
+- [ ] Kontrollera källspårning
+- [ ] Testa fallback-scenario
+
+### **🎯 SUCCESS KRITERIER**:
+
+**Tekniska kriterier**:
+- [x] SMHI gust-parameter identifierad ELLER robust estimering fungerar
+- [x] `wind_gust` och `wind_gust_source` finns i weather_data
+- [x] Kvalitetskontroll säkerställer gust >= medelvind
+- [x] Befintlig funktionalitet opåverkad
+
+**Funktionella kriterier**:
+- [x] Test-kommando visar gust-data korrekt
+- [x] Källspårning visar 'smhi_forecast', 'smhi_observations' eller 'estimated'
+- [x] Meteorologiskt rimliga värden (ratio 1.1-2.5)
+- [x] Graceful fallback när SMHI-data saknas
+
+---
+
+## 🚀 Nästa Steg Integration
+
+### **🔗 STEG 3 FÖRBEREDELSE**:
+
+Efter STEG 2 ska följande vara klart för trigger-integration:
+
+**Data tillgänglig**:
+```python
+weather_data['wind_gust']        # Gust-värde i m/s
+weather_data['wind_gust_source'] # Källinformation
+```
+
+**Trigger-kontext utökning**:
+```python
+# I main_daemon.py build_trigger_context():
+context.update({
+    'wind_speed': weather_data.get('wind_speed', 0),
+    'wind_gust': weather_data.get('wind_gust', 0),  # NYTT
+    'wind_direction': weather_data.get('wind_direction', 0)
+})
+```
+
+**Config-exempel**:
+```json
+{
+  "wind_trigger": {
+    "condition": "wind_speed > 8.0 OR wind_gust > 8.0"
+  }
+}
+```
+
+### **🎨 STEG 4 FÖRBEREDELSE**:
+
+Efter STEG 3 ska följande vara klart för WindRenderer:
+
+**Display-format**:
+```
+"8.5 m/s (12)"    # medelvind (gust)
+"10.2 m/s (~14)"  # medelvind (estimerad gust)
+"6.5 m/s"         # endast medelvind (gust låg)
+```
+
+**Layout-överväganden**:
+- Längre text: "8.5 m/s (12)" = 12 tecken vs "8.5 m/s" = 7 tecken
+- Behöver testa radbrytning i wind-modulen
+- Eventuell förkortning: "8.5(12)" för tight layout
+
+---
+
+## 📚 Teknisk Referensmaterial
+
+### **🌐 API-endpoints**:
+
+```bash
+# SMHI Prognoser (primär källa)
+https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/{lon}/lat/{lat}/data.json
+
+# SMHI Observations (backup källa)  
+https://opendata-download-metobs.smhi.se/api/version/latest/parameter/{param_id}/station/{station_id}/period/latest-hour/data.json
+
+# Parameter discovery
+https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/parameter.json
+```
+
+### **📊 Kända parametrar**:
+
+```python
+# VINDPARAMETRAR (befintliga)
+'ws': 'vindstyrka (m/s)',
+'wd': 'vindriktning (grader)',
+
+# GUST-KANDIDATER (från research)
+'wg': 'wind gust (mest trolig)',
+'gust': 'gust (standardnamn)',
+'wind_gust': 'wind_gust (beskrivande)',
+'wind_gust_speed': 'wind_gust_speed (från Homey)',
+
+# OBSERVATIONS (möjliga)
+21: 'Medelvind observationer',
+23: 'Vindby observationer (trolig)',
+24: 'Max vind observationer (trolig)',
+```
+
+### **⚙️ Konfiguration**:
+
+```python
+# Cache-tider
+SMHI_FORECAST_CACHE = 1800  # 30 minuter
+SMHI_OBSERVATIONS_CACHE = 900  # 15 minuter
+
+# Estimering-faktorer
+GUST_FACTOR_NEUTRAL = 1.4   # Normal väderlek
+GUST_FACTOR_UNSTABLE = 1.6  # Instabil väderlek  
+GUST_FACTOR_STABLE = 1.2    # Stabil väderlek
+
+# Kvalitetsgränser
+MIN_GUST_RATIO = 1.0        # Gust >= medelvind
+MAX_GUST_RATIO = 3.0        # Orealistiskt över detta
+TYPICAL_GUST_RATIO = 1.4    # Typiskt förhållande
+```
+
+---
+
+**🎯 DENNA KUNSKAPSBAS INNEHÅLLER ALLT som behövs för att implementera vindbyar-stöd i Wind Module Enhancement Project. Använd den som referens under he

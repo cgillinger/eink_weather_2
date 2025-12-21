@@ -1,0 +1,78 @@
+################################
+# Python
+################################
+
+# Bytecode / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+
+################################
+# Cache & runtime data
+################################
+
+cache/
+modules/cache/
+*.json
+
+################################
+# Databaser & lokala data
+################################
+
+*.sqlite3
+*.db
+
+################################
+# Loggar
+################################
+
+*.log
+
+################################
+# Konfig / hemligheter
+################################
+
+config.json
+.env.local
+
+################################
+# Backup
+################################
+
+backup/
+backup*/
+*backup*
+
+################################
+# OS / editor
+################################
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+################################
+# Node (om frontend tillkommer)
+################################
+
+node_modules/
+
+################################
+# Projekt-specifikt
+################################
+
+/e-Paper
+

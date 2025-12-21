@@ -1,0 +1,32 @@
+[Unit]
+Description=E-Paper Weather Display Daemon
+Documentation=E-Paper Weather Station with Netatmo + SMHI + Smart Updates
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=chris
+Group=chris
+WorkingDirectory=/home/chris/epaper_weather
+ExecStart=/usr/bin/python3 /home/chris/epaper_weather/main_daemon.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONPATH=/home/chris/epaper_weather
+Environment=HOME=/home/chris
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
