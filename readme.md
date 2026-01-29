@@ -621,23 +621,6 @@ You should see:
 ---
 
 ## SMHI Observations Configuration
-    "latitude": 35.6762,
-    "longitude": 139.6503
-  }
-}
-```
-
-**Note:** YR doesn't use observation stations - the `smhi_observations` section is ignored.
-
-**Global Location Examples:**
-- **New York**: `40.7128, -74.0060`
-- **London**: `51.5074, -0.1278`
-- **Sydney**: `-33.8688, 151.2093`
-- **Singapore**: `1.3521, 103.8198`
-
----
-
-## SMHI Observations Configuration
 
 **For SMHI provider users in Sweden:**
 
@@ -882,19 +865,74 @@ git clone <your-repo-url> epaper_weather
 cd epaper_weather
 
 # Install Python dependencies
-pip3 install -r requirements.txt
+pip3 install flask requests Pillow
 
-# Copy and edit configuration
-cp config.json.example config.json
+# Create configuration file
 nano config.json
-# Configure:
-# - Choose weather provider ("smhi" or "yr")
-# - Set location coordinates
-# - Add Netatmo credentials (see "Netatmo Setup Guide" section for details)
-# - Configure SMHI observation stations (if using SMHI provider)
+```
+
+**Minimal config.json example:**
+```json
+{
+  "weather_provider": "smhi",
+  "location": {
+    "name": "Stockholm",
+    "latitude": 59.3293,
+    "longitude": 18.0686
+  },
+  "layout": {
+    "screen_width": 800,
+    "screen_height": 480
+  },
+  "display": {
+    "font_path": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+  },
+  "fonts": {
+    "hero_temp": 72,
+    "hero_desc": 24,
+    "medium_main": 36,
+    "medium_desc": 18,
+    "small_main": 24,
+    "small_desc": 14,
+    "tiny": 10
+  },
+  "modules": {
+    "main_weather": {
+      "enabled": true,
+      "coords": {"x": 0, "y": 0},
+      "size": {"width": 440, "height": 280}
+    },
+    "barometer_module": {
+      "enabled": true,
+      "coords": {"x": 440, "y": 0},
+      "size": {"width": 360, "height": 200}
+    },
+    "tomorrow_forecast": {
+      "enabled": true,
+      "coords": {"x": 440, "y": 200},
+      "size": {"width": 360, "height": 180}
+    },
+    "clock_module": {
+      "enabled": true,
+      "coords": {"x": 0, "y": 280},
+      "size": {"width": 220, "height": 100}
+    },
+    "status_module": {
+      "enabled": true,
+      "coords": {"x": 220, "y": 280},
+      "size": {"width": 220, "height": 100}
+    }
+  },
+  "debug": {
+    "test_mode": false,
+    "log_level": "INFO"
+  }
+}
 ```
 
 **Important:** For Netatmo setup, see the detailed **[Netatmo Setup Guide](#netatmo-setup-guide)** section which explains how to get your API credentials.
+
+**Note:** The `install_daemon.sh` script requires you to edit the service file paths to match your username and installation directory.
 
 ### 4. Install as Systemd Service
 
@@ -912,6 +950,55 @@ sudo journalctl -u epaper-weather -f
 ---
 
 ## Usage
+
+### Mobile Web Viewer (iPhone/iPad)
+
+View the weather display on your phone or tablet - perfect for when you're away from the physical E-Paper display.
+
+**Start the web server on your Raspberry Pi:**
+```bash
+python3 web_server.py
+```
+
+**Add to iPhone/iPad home screen:**
+1. Open Safari on your iPhone/iPad
+2. Go to `http://<raspberry-pi-ip>:5000`
+3. Tap the Share button → "Add to Home Screen"
+4. Name it "Väder" (or any name you prefer)
+5. Tap "Add"
+
+**Usage:**
+- Open the home screen shortcut - displays the latest weather image
+- **Tap anywhere on the screen** to refresh and get the latest weather
+- The display mimics the E-Paper aesthetic (no visible buttons or UI)
+
+**Run as background service (optional):**
+```bash
+# Create systemd service for web server
+sudo nano /etc/systemd/system/epaper-web.service
+```
+
+Add (adjust paths and username to match your setup):
+```ini
+[Unit]
+Description=E-Paper Weather Web Server
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/YOUR_USER/epaper_weather/web_server.py
+WorkingDirectory=/home/YOUR_USER/epaper_weather
+User=YOUR_USER
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then:
+```bash
+sudo systemctl enable epaper-web
+sudo systemctl start epaper-web
+```
 
 ### Daemon Commands
 
@@ -959,19 +1046,14 @@ sudo journalctl -u epaper-weather -f | grep "Provider"
 # or: "✅ Creating SMHI provider (Sweden only)"
 ```
 
-### Testing Precipitation Module
+### Testing Triggers
 
 ```bash
-# Inject test data
-python3 test_precipitation_trigger.py
-# Select scenario (e.g., "2" for moderate rain)
+# Test wind gust and precipitation triggers
+python3 test_gust_triggers.py
 
-# Restart to load test data
+# Restart daemon after testing
 python3 restart.py
-
-# Clean test data
-python3 test_precipitation_trigger.py
-# Select "10" to clean
 ```
 
 ---
@@ -1141,8 +1223,14 @@ sudo journalctl -u epaper-weather | grep "Netatmo"
 ```
 epaper_weather/
 ├── main_daemon.py              # Main daemon with dynamic system
-├── config.json                 # Configuration file
-├── requirements.txt            # Python dependencies
+├── main.py                     # Single-run version (for testing)
+├── web_server.py               # Web server for mobile viewing
+├── config.json                 # Configuration file (create this)
+├── restart.py                  # Restart daemon helper
+├── screenshot.py               # Manual screenshot utility
+├── install_daemon.sh           # Systemd service installer
+├── convert_svg_high_res.py     # Icon conversion utility
+├── test_gust_triggers.py       # Test precipitation/wind triggers
 ├── modules/
 │   ├── weather_client.py       # Integrates all data sources
 │   ├── weather_provider_factory.py  # Creates provider instances
@@ -1161,10 +1249,13 @@ epaper_weather/
 │   ├── weather/                # Weather Icons (SMHI + YR symbols)
 │   ├── pressure/               # Pressure trend arrows
 │   ├── sun/                    # Sunrise/sunset icons
-│   └── system/                 # System icons (battery, UV, etc.)
-└── tools/
-    ├── restart.py
-    └── test_precipitation_trigger.py
+│   ├── system/                 # System icons (barometer, calendar, etc.)
+│   └── wind/                   # Wind direction icons
+├── systemd/
+│   └── epaper-weather.service  # Systemd service file
+├── screenshots/                # Auto-generated weather screenshots
+├── cache/                      # Runtime cache (auto-created)
+└── logs/                       # Log files (auto-created)
 ```
 
 ---
@@ -1308,7 +1399,7 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Created:** 2024  
-**Last Updated:** December 2024  
-**Platform:** Raspberry Pi 3B + Waveshare 4.26" E-Paper HAT  
-**Version:** Multi-Provider System v2.0
+**Created:** 2024
+**Last Updated:** January 2025
+**Platform:** Raspberry Pi 3B + Waveshare 4.26" E-Paper HAT
+**Version:** Multi-Provider System v2.1 (+ Mobile Web Viewer)
