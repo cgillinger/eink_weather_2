@@ -913,6 +913,55 @@ sudo journalctl -u epaper-weather -f
 
 ## Usage
 
+### Mobile Web Viewer (iPhone/iPad)
+
+View the weather display on your phone or tablet - perfect for when you're away from the physical E-Paper display.
+
+**Start the web server on your Raspberry Pi:**
+```bash
+python3 web_server.py
+```
+
+**Add to iPhone/iPad home screen:**
+1. Open Safari on your iPhone/iPad
+2. Go to `http://<raspberry-pi-ip>:5000`
+3. Tap the Share button → "Add to Home Screen"
+4. Name it "Väder" (or any name you prefer)
+5. Tap "Add"
+
+**Usage:**
+- Open the home screen shortcut - displays the latest weather image
+- **Tap anywhere on the screen** to refresh and get the latest weather
+- The display mimics the E-Paper aesthetic (no visible buttons or UI)
+
+**Run as background service (optional):**
+```bash
+# Create systemd service for web server
+sudo nano /etc/systemd/system/epaper-web.service
+```
+
+Add:
+```ini
+[Unit]
+Description=E-Paper Weather Web Server
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/epaper_weather/web_server.py
+WorkingDirectory=/home/pi/epaper_weather
+User=pi
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then:
+```bash
+sudo systemctl enable epaper-web
+sudo systemctl start epaper-web
+```
+
 ### Daemon Commands
 
 ```bash
@@ -1141,6 +1190,7 @@ sudo journalctl -u epaper-weather | grep "Netatmo"
 ```
 epaper_weather/
 ├── main_daemon.py              # Main daemon with dynamic system
+├── web_server.py               # Web server for mobile viewing
 ├── config.json                 # Configuration file
 ├── requirements.txt            # Python dependencies
 ├── modules/
@@ -1308,7 +1358,7 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Created:** 2024  
-**Last Updated:** December 2024  
-**Platform:** Raspberry Pi 3B + Waveshare 4.26" E-Paper HAT  
-**Version:** Multi-Provider System v2.0
+**Created:** 2024
+**Last Updated:** January 2025
+**Platform:** Raspberry Pi 3B + Waveshare 4.26" E-Paper HAT
+**Version:** Multi-Provider System v2.1 (+ Mobile Web Viewer)
