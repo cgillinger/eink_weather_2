@@ -126,17 +126,28 @@ def index():
     </style>
 </head>
 <body>
-    <div class="container" onclick="refresh()">
+    <div class="container" id="container">
         <img src="/image?t={timestamp}" class="weather-img" alt="Väder">
         <div class="loading"><span class="spinner"></span>Uppdaterar...</div>
     </div>
     <script>
-        function refresh() {{
-            document.querySelector('.container').classList.add('refreshing');
+        var container = document.getElementById('container');
+        var isRefreshing = false;
+
+        function doRefresh() {{
+            if (isRefreshing) return;
+            isRefreshing = true;
+            container.classList.add('refreshing');
             setTimeout(function() {{
                 window.location.href = '/?t=' + Date.now();
             }}, 800);
         }}
+
+        container.addEventListener('click', doRefresh);
+        container.addEventListener('touchend', function(e) {{
+            e.preventDefault();
+            doRefresh();
+        }});
     </script>
 </body>
 </html>'''
