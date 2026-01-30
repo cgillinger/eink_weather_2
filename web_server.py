@@ -85,33 +85,57 @@ def index():
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
+            transition: opacity 0.3s ease;
         }}
         .loading {{
             position: fixed;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            font-family: -apple-system, sans-serif;
-            color: #666;
-            display: none;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 18px;
+            color: #333;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
         }}
         .container.refreshing .loading {{
-            display: block;
+            opacity: 1;
         }}
         .container.refreshing .weather-img {{
-            opacity: 0.5;
+            opacity: 0.3;
+        }}
+        .spinner {{
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ccc;
+            border-top-color: #333;
+            border-radius: 50%;
+            margin-right: 10px;
+            vertical-align: middle;
+            animation: spin 1s linear infinite;
+        }}
+        @keyframes spin {{
+            to {{ transform: rotate(360deg); }}
         }}
     </style>
 </head>
 <body>
     <div class="container" onclick="refresh()">
         <img src="/image?t={timestamp}" class="weather-img" alt="Väder">
-        <div class="loading">Uppdaterar...</div>
+        <div class="loading"><span class="spinner"></span>Uppdaterar...</div>
     </div>
     <script>
         function refresh() {{
             document.querySelector('.container').classList.add('refreshing');
-            window.location.href = '/?t=' + Date.now();
+            setTimeout(function() {{
+                window.location.href = '/?t=' + Date.now();
+            }}, 800);
         }}
     </script>
 </body>
