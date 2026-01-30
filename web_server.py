@@ -28,7 +28,7 @@ app = Flask(__name__)
 
 # Konfiguration
 SCREENSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'screenshots')
-PORT = 5000
+PORT = 8037
 
 
 def get_latest_screenshot():

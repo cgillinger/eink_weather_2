@@ -1,0 +1,17 @@
+# Web Server Dependencies för E-Paper Weather Station
+# Headless version för Synology NAS / Desktop viewing
+
+# Flask web framework
+Flask==3.0.0
+Werkzeug==3.0.1
+
+# ALLA befintliga dependencies från requirements.txt behövs också
+# Kopiera från requirements.txt:
+requests==2.31.0
+Pillow==10.1.0
+# ... (resten från requirements.txt)
+
+# VIKTIGT: Detta är TILLÄGG till requirements.txt, inte ersättning
+# Installera båda:
+# pip install -r requirements.txt
+# pip install -r requirements_web.txt
