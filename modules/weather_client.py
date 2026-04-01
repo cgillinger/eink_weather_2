@@ -562,7 +562,7 @@ class WeatherClient:
             # Filtrera prognoser för kommande 2 timmar
             next_hours_forecasts = []
             for forecast in smhi_forecast_data['timeSeries']:
-                forecast_time = datetime.fromisoformat(forecast['validTime'].replace('Z', '+00:00'))
+                forecast_time = datetime.fromisoformat(forecast['time'].replace('Z', '+00:00'))
 
                 if now <= forecast_time <= two_hours_ahead:
                     next_hours_forecasts.append((forecast_time, forecast))
@@ -586,14 +586,10 @@ class WeatherClient:
                 precip_type = 0
 
                 try:
-                    for param in forecast.get('parameters', []):
-                        param_name = param.get('name', '')
-                        param_values = param.get('values', [])
-
-                        if param_name == 'pmin' and param_values:  # Nederbörd mm/h
-                            precipitation = float(param_values[0])
-                        elif param_name == 'pcat' and param_values:  # Nederbörd-typ
-                            precip_type = int(param_values[0])
+                    # SNOW1gv1 flat data object
+                    d = forecast.get('data', {})
+                    precipitation = float(d.get('precipitation_amount_min', 0.0))
+                    precip_type = int(d.get('predominant_precipitation_type_at_surface', 0))
 
                     # DEBUGGING: Logga varje prognos
                     self.logger.debug(f"  {forecast_time.strftime('%H:%M')}: {precipitation}mm/h (typ: {precip_type})")
@@ -1135,7 +1131,7 @@ class WeatherClient:
         try:
             self.logger.debug("📡 Hämtar full SMHI forecast för cykel-analys...")
 
-            url = f"https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/{self.longitude}/lat/{self.latitude}/data.json"
+            url = f"https://opendata-download-metfcst.smhi.se/api/category/snow1g/version/1/geotype/point/lon/{self.longitude}/lat/{self.latitude}/data.json"
 
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -1160,7 +1156,7 @@ class WeatherClient:
         try:
             self.logger.info("📡 Hämtar SMHI-data...")
 
-            url = f"https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/{self.longitude}/lat/{self.latitude}/data.json"
+            url = f"https://opendata-download-metfcst.smhi.se/api/category/snow1g/version/1/geotype/point/lon/{self.longitude}/lat/{self.latitude}/data.json"
 
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -1176,7 +1172,7 @@ class WeatherClient:
             tomorrow_forecast = None
             now = datetime.now()
             for forecast in time_series:
-                forecast_time = datetime.fromisoformat(forecast['validTime'].replace('Z', '+00:00'))
+                forecast_time = datetime.fromisoformat(forecast['time'].replace('Z', '+00:00'))
                 tomorrow = now + timedelta(days=1)
                 if (forecast_time.date() == tomorrow.date() and
                     forecast_time.hour == 12):
@@ -1245,48 +1241,46 @@ class WeatherClient:
         }
 
         if current:
-            # Aktuell väderdata
-            for param in current['parameters']:
-                if param['name'] == 't':  # Temperatur (kommer att överskrivas av Netatmo)
-                    data['temperature'] = round(param['values'][0], 1)
-                elif param['name'] == 'Wsymb2':  # Vädersymbol
-                    data['weather_symbol'] = param['values'][0]
-                    data['weather_description'] = self.get_weather_description(param['values'][0])
-                elif param['name'] == 'ws':  # Vindstyrka
-                    data['wind_speed'] = param['values'][0]
-                elif param['name'] == 'wd':  # FAS 1: VINDRIKTNING TILLAGD
-                    data['wind_direction'] = float(param['values'][0])
-                elif param['name'] == 'gust':  # NYTT: VINDBYAR TILLAGD
-                    data['wind_gust'] = param['values'][0]
-                    self.logger.info(f"💨 VINDBYAR hämtad från SMHI: {param['values'][0]} m/s")
-                elif param['name'] == 'msl':  # Lufttryck (kommer att överskrivas av Netatmo)
-                    data['pressure'] = round(param['values'][0], 0)
-                elif param['name'] == 'pmin':  # NYTT: Nederbörd mm/h
-                    data['precipitation'] = param['values'][0]
-                elif param['name'] == 'pcat':  # NYTT: Nederbörd-typ
-                    data['precipitation_type'] = param['values'][0]
+            # Aktuell väderdata - SNOW1gv1 flat data object
+            d = current.get('data', {})
+            if 'air_temperature' in d:
+                data['temperature'] = round(d['air_temperature'], 1)
+            if 'symbol_code' in d:
+                data['weather_symbol'] = d['symbol_code']
+                data['weather_description'] = self.get_weather_description(d['symbol_code'])
+            if 'wind_speed' in d:
+                data['wind_speed'] = d['wind_speed']
+            if 'wind_from_direction' in d:
+                data['wind_direction'] = float(d['wind_from_direction'])
+            if 'wind_speed_of_gust' in d:
+                data['wind_gust'] = d['wind_speed_of_gust']
+                self.logger.info(f"💨 VINDBYAR hämtad från SMHI: {d['wind_speed_of_gust']} m/s")
+            if 'air_pressure_at_mean_sea_level' in d:
+                data['pressure'] = round(d['air_pressure_at_mean_sea_level'], 0)
+            if 'precipitation_amount_min' in d:
+                data['precipitation'] = d['precipitation_amount_min']
+            if 'predominant_precipitation_type_at_surface' in d:
+                data['precipitation_type'] = d['predominant_precipitation_type_at_surface']
 
         if tomorrow:
-            # Morgondagens väder
+            # Morgondagens väder - SNOW1gv1 flat data object
+            d = tomorrow.get('data', {})
             tomorrow_data = {}
-            for param in tomorrow['parameters']:
-                if param['name'] == 't':
-                    tomorrow_data['temperature'] = round(param['values'][0], 1)
-                elif param['name'] == 'Wsymb2':
-                    tomorrow_data['weather_symbol'] = param['values'][0]
-                    tomorrow_data['weather_description'] = self.get_weather_description(param['values'][0])
-                # FAS 1: Lägg till vinddata för imorgon också
-                elif param['name'] == 'ws':
-                    tomorrow_data['wind_speed'] = param['values'][0]
-                elif param['name'] == 'wd':
-                    tomorrow_data['wind_direction'] = float(param['values'][0])
-                elif param['name'] == 'gust':  # NYTT: VINDBYAR för imorgon
-                    tomorrow_data['wind_gust'] = param['values'][0]
-                # NYTT: Lägg till nederbörd för imorgon också
-                elif param['name'] == 'pmin':
-                    tomorrow_data['precipitation'] = param['values'][0]
-                elif param['name'] == 'pcat':
-                    tomorrow_data['precipitation_type'] = param['values'][0]
+            if 'air_temperature' in d:
+                tomorrow_data['temperature'] = round(d['air_temperature'], 1)
+            if 'symbol_code' in d:
+                tomorrow_data['weather_symbol'] = d['symbol_code']
+                tomorrow_data['weather_description'] = self.get_weather_description(d['symbol_code'])
+            if 'wind_speed' in d:
+                tomorrow_data['wind_speed'] = d['wind_speed']
+            if 'wind_from_direction' in d:
+                tomorrow_data['wind_direction'] = float(d['wind_from_direction'])
+            if 'wind_speed_of_gust' in d:
+                tomorrow_data['wind_gust'] = d['wind_speed_of_gust']
+            if 'precipitation_amount_min' in d:
+                tomorrow_data['precipitation'] = d['precipitation_amount_min']
+            if 'predominant_precipitation_type_at_surface' in d:
+                tomorrow_data['precipitation_type'] = d['predominant_precipitation_type_at_surface']
 
             data['tomorrow'] = tomorrow_data
 
