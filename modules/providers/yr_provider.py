@@ -124,9 +124,9 @@ class YRWeatherProvider(WeatherProvider):
                 if expires and datetime.now(timezone.utc) < expires:
                     self.logger.info("📋 Using cached YR forecast data")
                     return self.forecast_cache['data']
-                    # Clear invalid cache
-                    self.forecast_cache['data'] = None
-                    self.forecast_cache['expires'] = None
+                # Clear expired cache (was previously dead code after the return)
+                self.forecast_cache['data'] = None
+                self.forecast_cache['expires'] = None
         
         try:
             self.logger.info("📡 Fetching YR forecast data...")
@@ -231,13 +231,21 @@ class YRWeatherProvider(WeatherProvider):
                 instant = current.get('data', {}).get('instant', {}).get('details', {})
                 next_1h = current.get('data', {}).get('next_1_hours', {})
                 
-                # Extract instant data
-                data['temperature'] = instant.get('air_temperature')
-                data['wind_speed'] = instant.get('wind_speed')
-                data['wind_direction'] = instant.get('wind_from_direction')
-                data['wind_gust'] = instant.get('wind_speed_of_gust')
-                data['pressure'] = instant.get('air_pressure_at_sea_level')
-                data['humidity'] = instant.get('relative_humidity')
+                # Extract instant data - only set keys that have actual values.
+                # Unconditional assignment let None slip through as a "present"
+                # value (e.g. wind_direction=None crashed the wind module)
+                instant_fields = {
+                    'temperature': 'air_temperature',
+                    'wind_speed': 'wind_speed',
+                    'wind_direction': 'wind_from_direction',
+                    'wind_gust': 'wind_speed_of_gust',
+                    'pressure': 'air_pressure_at_sea_level',
+                    'humidity': 'relative_humidity',
+                }
+                for key, api_key in instant_fields.items():
+                    value = instant.get(api_key)
+                    if value is not None:
+                        data[key] = value
                 
                 # Extract next_1_hours summary
                 if next_1h:

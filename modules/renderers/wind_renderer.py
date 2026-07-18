@@ -97,6 +97,14 @@ class WindRenderer(ModuleRenderer):
             
             def wrap2_ellips(text, font, max_w):
                 """Radbrytning: Max två rader innan ellips (kollegans algoritm)"""
+                def fit(line):
+                    # Ellipsera en rad som ändå är för bred (enskilt för långt ord)
+                    if text_w(line, font) <= max_w:
+                        return line
+                    while text_w(line + '…', font) > max_w and len(line) > 1:
+                        line = line[:-1].rstrip()
+                    return line + '…'
+
                 words, lines, cur = text.split(), [], ''
                 for i, w in enumerate(words):
                     test = (cur + ' ' + w).strip()
@@ -111,10 +119,10 @@ class WindRenderer(ModuleRenderer):
                             while text_w(rest + '…', font) > max_w and len(rest) > 1:
                                 rest = rest[:-1].rstrip()
                             lines.append(rest + ('…' if len(rest) < len(' '.join([cur] + words[i+1:])) else ''))
-                            return lines
+                            return [fit(line) for line in lines]
                 if cur:
                     lines.append(cur)
-                return lines[:2]
+                return [fit(line) for line in lines[:2]]
             
             # === 1. PRIMÄRBLOCK: M/S + VINDBYAR + BESKRIVNING (REN LAYOUT) ===
             

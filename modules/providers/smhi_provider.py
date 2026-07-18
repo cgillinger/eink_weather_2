@@ -158,6 +158,9 @@ class SMHIWeatherProvider(WeatherProvider):
             if observations_data:
                 observations_data['station_id'] = self.alternative_station_id
                 observations_data['station_name'] = 'Arlanda (alternative)'
+                # Cache fallback result too - otherwise every update retries
+                # primary + fallback for as long as the primary station is down
+                self.observations_cache = {'data': observations_data, 'timestamp': time.time()}
                 self.logger.info(f"✅ SMHI Observations from alternative station: {observations_data.get('precipitation_observed', 0)}mm/h")
                 return observations_data
             
@@ -342,7 +345,11 @@ class SMHIWeatherProvider(WeatherProvider):
                 self.logger.info(f"💨 Wind gusts from SMHI: {d['wind_speed_of_gust']} m/s")
             if 'air_pressure_at_mean_sea_level' in d:
                 data['pressure'] = round(d['air_pressure_at_mean_sea_level'], 0)
-            if 'precipitation_amount_min' in d:
+            # mean, inte min: min är ensemblens mest optimistiska värde och
+            # missar regn som de flesta modeller pekar på
+            if 'precipitation_amount_mean' in d:
+                data['precipitation'] = d['precipitation_amount_mean']
+            elif 'precipitation_amount_min' in d:
                 data['precipitation'] = d['precipitation_amount_min']
             if 'predominant_precipitation_type_at_surface' in d:
                 data['precipitation_type'] = d['predominant_precipitation_type_at_surface']
@@ -362,7 +369,9 @@ class SMHIWeatherProvider(WeatherProvider):
                 tomorrow_data['wind_direction'] = float(d['wind_from_direction'])
             if 'wind_speed_of_gust' in d:
                 tomorrow_data['wind_gust'] = d['wind_speed_of_gust']
-            if 'precipitation_amount_min' in d:
+            if 'precipitation_amount_mean' in d:
+                tomorrow_data['precipitation'] = d['precipitation_amount_mean']
+            elif 'precipitation_amount_min' in d:
                 tomorrow_data['precipitation'] = d['precipitation_amount_min']
             if 'predominant_precipitation_type_at_surface' in d:
                 tomorrow_data['precipitation_type'] = d['predominant_precipitation_type_at_surface']
@@ -430,7 +439,7 @@ class SMHIWeatherProvider(WeatherProvider):
                 try:
                     # SNOW1gv1 flat data object
                     d = forecast.get('data', {})
-                    precipitation = float(d.get('precipitation_amount_min', 0.0))
+                    precipitation = float(d.get('precipitation_amount_mean', d.get('precipitation_amount_min', 0.0)))
                     precip_type = int(d.get('predominant_precipitation_type_at_surface', 0))
                     
                     self.logger.debug(f"  {forecast_time.strftime('%H:%M')}: {precipitation}mm/h (type: {precip_type})")

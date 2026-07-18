@@ -370,7 +370,7 @@ class WeatherIconManager:
         Returns:
             Tuple (kort_svensk_förkortning, kardinal_kod)
         """
-        if degrees < 0 or degrees > 360:
+        if degrees is None or degrees < 0 or degrees > 360:
             return "?", "n"
         
         # 16 sektorer à 22.5 grader med KORTA svenska förkortningar
