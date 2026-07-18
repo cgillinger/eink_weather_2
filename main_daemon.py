@@ -998,7 +998,6 @@ class EPaperWeatherDaemon:
         pressure = weather_data.get('pressure', 1013)
         pressure_source = weather_data.get('pressure_source', 'unknown')
         pressure_trend = weather_data.get('pressure_trend', {})
-        trend_text = weather_data.get('pressure_trend_text', 'Samlar data')
         trend_arrow = weather_data.get('pressure_trend_arrow', 'stable')
         level_text = weather_data.get('pressure_level_text', '')
 
@@ -1019,23 +1018,22 @@ class EPaperWeatherDaemon:
         elif pressure_source == 'smhi':
             self.draw.text((x + 152, y + 105), "(SMHI)", font=self.fonts['tiny'], fill=0)
 
-        # Tryckord enligt pressure-descriptions.md: nivåord + trendord på egna
-        # rader, trunkerade så de aldrig kolliderar med pilen i nedre högra
-        # hörnet (övre högra täcker tryckvärdets sista siffror)
+        # Endast nivåordet (Storm/Regn/Ostadigt/Vackert/Mycket Torrt) visas -
+        # trendord (Stiger/Faller/Stabilt) togs bort: två sorters väderord
+        # blev förvirrande. Trenden syns via siffran och pilen istället.
         word_max_w = width - 100
         if level_text:
-            self.draw.text((x + 20, y + 125),
+            self.draw.text((x + 20, y + 130),
                            self.truncate_text(level_text, self.fonts['medium_desc'], word_max_w),
                            font=self.fonts['medium_desc'], fill=0)
 
-        self.draw.text((x + 20, y + 150),
-                       self.truncate_text(trend_text, self.fonts['medium_desc'], word_max_w),
-                       font=self.fonts['medium_desc'], fill=0)
-
-        # Numerisk 3h-förändring om tillgänglig
+        # Numerisk 3h-förändring (~ = preliminär), eller insamlingsstatus
         if pressure_trend.get('change_3h') is not None and pressure_trend.get('trend') != 'insufficient_data':
-            change_text = f"{pressure_trend['change_3h']:+.1f} hPa/3h"
-            self.draw.text((x + 20, y + 175), change_text, font=self.fonts['small_desc'], fill=0)
+            prefix = '~' if pressure_trend.get('is_preliminary') else ''
+            change_text = f"{prefix}{pressure_trend['change_3h']:+.1f} hPa/3h"
+            self.draw.text((x + 20, y + 160), change_text, font=self.fonts['small_desc'], fill=0)
+        else:
+            self.draw.text((x + 20, y + 160), "Samlar data", font=self.fonts['small_desc'], fill=0)
 
         # TREND-PIL från Weather Icons - OPTIMERAD STORLEK (64x64)
         trend_icon = self.icon_manager.get_pressure_icon(trend_arrow, size=(64, 64))
