@@ -447,12 +447,22 @@ class EPaperWeatherWeb:
 
         self.draw.text((x + 100, y + 100), "hPa", font=self.fonts['medium_desc'], fill=0)
 
-        # Tryckord enligt pressure-descriptions.md: nivåord + trendord på egna
-        # rader. Pilen sitter i övre högra hörnet så ordraderna får full bredd.
-        if level_text:
-            self.draw.text((x + 20, y + 125), level_text, font=self.fonts['medium_desc'], fill=0)
+        # Källa diskret bredvid hPa-texten (nedre raderna upptas av orden)
+        if pressure_source == 'netatmo':
+            self.draw.text((x + 152, y + 105), "(Netatmo)", font=self.fonts['tiny'], fill=0)
 
-        self.draw.text((x + 20, y + 150), trend_text, font=self.fonts['medium_desc'], fill=0)
+        # Tryckord enligt pressure-descriptions.md: nivåord + trendord på egna
+        # rader, trunkerade så de aldrig kolliderar med pilen i nedre högra
+        # hörnet (övre högra täcker tryckvärdets sista siffror)
+        word_max_w = width - 100
+        if level_text:
+            self.draw.text((x + 20, y + 125),
+                           self.truncate_text(level_text, self.fonts['medium_desc'], word_max_w),
+                           font=self.fonts['medium_desc'], fill=0)
+
+        self.draw.text((x + 20, y + 150),
+                       self.truncate_text(trend_text, self.fonts['medium_desc'], word_max_w),
+                       font=self.fonts['medium_desc'], fill=0)
 
         if pressure_trend.get('change_3h') is not None and pressure_trend.get('trend') != 'insufficient_data':
             change_text = f"{pressure_trend['change_3h']:+.1f} hPa/3h"
@@ -460,10 +470,7 @@ class EPaperWeatherWeb:
 
         trend_icon = self.icon_manager.get_pressure_icon(trend_arrow, size=(64, 64))
         if trend_icon:
-            self.paste_icon_on_canvas(trend_icon, x + width - 75, y + 25)
-
-        if pressure_source == 'netatmo':
-            self.draw.text((x + width - 90, y + height - 20), "(Netatmo)", font=self.fonts['tiny'], fill=0)
+            self.paste_icon_on_canvas(trend_icon, x + width - 75, y + 130)
 
     def legacy_render_tomorrow_forecast(self, x, y, width, height, weather_data, trigger_context):
         """Forecast module rendering"""
