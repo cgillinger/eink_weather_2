@@ -32,6 +32,7 @@ wc.PRESSURE_SAVE_MIN_INTERVAL_MINUTES = 5
 wc.PRESSURE_TREND_MIN_MINUTES = 30
 wc.PRESSURE_TREND_FULL_HOURS = 2.5
 wc.PRESSURE_TREND_THRESHOLD_3H = 2.0
+wc.PRESSURE_TREND_STABLE_3H = 0.5
 
 # 1. Dedupe: två sparningar direkt efter varandra -> 1 post
 wc.save_pressure_measurement(1000, 'smhi')
@@ -112,6 +113,29 @@ config['triggers']['high_prio']['condition'] = '1 > 2'
 dm2 = DynamicModuleManager(config)
 res2 = dm2.evaluate_triggers({})
 check('lägre prioritet vinner när högre är inaktiv', res2.get('bottom_section') == 'low_group', str(res2))
+
+# ---------- Tryckord (pressure-descriptions.md) ----------
+print("Tryckord:")
+check('nivå: 975 -> Storm', wc.describe_pressure_level(975) == 'Storm')
+check('nivå: 990 -> Regn', wc.describe_pressure_level(990) == 'Regn')
+check('nivå: 1005 -> Ostadigt', wc.describe_pressure_level(1005) == 'Ostadigt')
+check('nivå: 1013 -> Vackert (gräns)', wc.describe_pressure_level(1013) == 'Vackert')
+check('nivå: 1045 -> Mycket Torrt', wc.describe_pressure_level(1045) == 'Mycket Torrt')
+check('trend: -3 -> Faller snabbt', wc.describe_pressure_trend(-3) == 'Faller snabbt')
+check('trend: -1 -> Faller', wc.describe_pressure_trend(-1) == 'Faller')
+check('trend: 0 -> Stabilt', wc.describe_pressure_trend(0) == 'Stabilt')
+check('trend: +1 -> Stiger', wc.describe_pressure_trend(1) == 'Stiger')
+check('trend: +3 -> Stiger snabbt', wc.describe_pressure_trend(3) == 'Stiger snabbt')
+
+# Pilklassificering följer nu stabilt-bandet ±0.5 (inte ±2)
+hist = [
+    {'timestamp': (now - timedelta(hours=3)).isoformat(), 'pressure': 1000, 'source': 'smhi'},
+    {'timestamp': now.isoformat(), 'pressure': 1001, 'source': 'smhi'},
+]
+with open(wc.pressure_history_file, 'w') as f:
+    json.dump(hist, f)
+t = wc.calculate_3h_pressure_trend()
+check('pil: +1 hPa/3h -> rising (spec-band)', t['trend'] == 'rising', str(t))
 
 # ---------- Uppföljnings-PR: UV, vindriktning ----------
 print("UV & vindriktning:")

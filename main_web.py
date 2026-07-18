@@ -436,6 +436,7 @@ class EPaperWeatherWeb:
         pressure_trend = weather_data.get('pressure_trend', {})
         trend_text = weather_data.get('pressure_trend_text', 'Samlar data')
         trend_arrow = weather_data.get('pressure_trend_arrow', 'stable')
+        level_text = weather_data.get('pressure_level_text', '')
 
         barometer_icon = self.icon_manager.get_system_icon('barometer', size=(80, 80))
         if barometer_icon:
@@ -446,24 +447,23 @@ class EPaperWeatherWeb:
 
         self.draw.text((x + 100, y + 100), "hPa", font=self.fonts['medium_desc'], fill=0)
 
-        if trend_text == 'Samlar data':
-            self.draw.text((x + 20, y + 125), "Samlar", font=self.fonts['medium_desc'], fill=0)
-            self.draw.text((x + 20, y + 150), "data", font=self.fonts['medium_desc'], fill=0)
-        else:
-            self.draw.text((x + 20, y + 125), trend_text, font=self.fonts['medium_desc'], fill=0)
+        # Tryckord enligt pressure-descriptions.md: nivåord + trendord på egna
+        # rader. Pilen sitter i övre högra hörnet så ordraderna får full bredd.
+        if level_text:
+            self.draw.text((x + 20, y + 125), level_text, font=self.fonts['medium_desc'], fill=0)
+
+        self.draw.text((x + 20, y + 150), trend_text, font=self.fonts['medium_desc'], fill=0)
 
         if pressure_trend.get('change_3h') is not None and pressure_trend.get('trend') != 'insufficient_data':
-            change_3h = pressure_trend['change_3h']
-            change_text = f"{change_3h:+.1f} hPa/3h"
-            change_y = y + 175 if trend_text == 'Samlar data' else y + 150
-            self.draw.text((x + 20, change_y), change_text, font=self.fonts['small_desc'], fill=0)
+            change_text = f"{pressure_trend['change_3h']:+.1f} hPa/3h"
+            self.draw.text((x + 20, y + 175), change_text, font=self.fonts['small_desc'], fill=0)
 
         trend_icon = self.icon_manager.get_pressure_icon(trend_arrow, size=(64, 64))
         if trend_icon:
-            self.paste_icon_on_canvas(trend_icon, x + width - 75, y + 100)
+            self.paste_icon_on_canvas(trend_icon, x + width - 75, y + 25)
 
         if pressure_source == 'netatmo':
-            self.draw.text((x + 20, y + height - 20), "(Netatmo)", font=self.fonts['tiny'], fill=0)
+            self.draw.text((x + width - 90, y + height - 20), "(Netatmo)", font=self.fonts['tiny'], fill=0)
 
     def legacy_render_tomorrow_forecast(self, x, y, width, height, weather_data, trigger_context):
         """Forecast module rendering"""

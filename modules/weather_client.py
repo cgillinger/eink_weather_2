@@ -36,6 +36,24 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Any
 
+# Tryckord enligt pressure-descriptions.md: nivåband för absoluttryck (hPa)
+# och femgradiga trendord för 3h-tendensen
+PRESSURE_LEVEL_BANDS = [
+    (980, 'Storm'),
+    (1000, 'Regn'),
+    (1013, 'Ostadigt'),
+    (1040, 'Vackert'),
+    (float('inf'), 'Mycket Torrt'),
+]
+
+PRESSURE_TREND_WORDS = [
+    (-2.0, 'Faller snabbt'),
+    (-0.5, 'Faller'),
+    (0.5, 'Stabilt'),
+    (2.0, 'Stiger'),
+    (float('inf'), 'Stiger snabbt'),
+]
+
 # Importera SunCalculator (med fallback)
 try:
     from sun_calculator import SunCalculator
@@ -104,6 +122,7 @@ class WeatherClient:
         self.PRESSURE_TREND_MIN_MINUTES = 30      # Minst 30 min för preliminär trend
         self.PRESSURE_TREND_FULL_HOURS = 2.5      # 2.5h+ = riktig trend (utan tilde)
         self.PRESSURE_TREND_THRESHOLD_3H = 2.0    # ±2 hPa/3h = meteorologisk standard
+        self.PRESSURE_TREND_STABLE_3H = 0.5       # |Δ3h| ≤ 0.5 = "stabilt" (pressure-descriptions.md)
 
         self.logger.info(f"🌍 WeatherClient initialiserad för {self.location_name}")
         self.logger.info(f"☀️ SunCalculator aktiverad för exakta soltider")
@@ -344,6 +363,23 @@ class WeatherClient:
             self.logger.warning(f"⚠️ Korrupt tryckhistorik ({e}) - börjar om med tom historik")
             return []
 
+    def describe_pressure_level(self, pressure: float) -> str:
+        """
+        Nivåord för absoluttryck enligt pressure-descriptions.md
+        (Storm < 980 < Regn < 1000 < Ostadigt < 1013 < Vackert < 1040 < Mycket Torrt)
+        """
+        for max_hpa, word in PRESSURE_LEVEL_BANDS:
+            if pressure < max_hpa:
+                return word
+        return PRESSURE_LEVEL_BANDS[-1][1]
+
+    def describe_pressure_trend(self, change_3h: float) -> str:
+        """Femgradigt trendord för 3h-tendensen enligt pressure-descriptions.md"""
+        for max_change, word in PRESSURE_TREND_WORDS:
+            if change_3h < max_change:
+                return word
+        return PRESSURE_TREND_WORDS[-1][1]
+
     def calculate_3h_pressure_trend(self) -> Dict[str, Any]:
         """
         Beräkna trycktrend med stöd för preliminär trend vid uppstart.
@@ -452,10 +488,12 @@ class WeatherClient:
             # Bestäm om detta är preliminär eller riktig trend
             is_preliminary = time_diff_hours < self.PRESSURE_TREND_FULL_HOURS
 
-            # Klassificera trend baserat på extrapolerat 3h-värde
-            if change_3h_extrapolated > self.PRESSURE_TREND_THRESHOLD_3H:
+            # Klassificera trend (pil) baserat på extrapolerat 3h-värde.
+            # ±0.5 hPa/3h är spec:ens "stabilt"-band; det femgradiga ordvalet
+            # (Stiger/Stiger snabbt osv.) sätts i combine_weather_data
+            if change_3h_extrapolated > self.PRESSURE_TREND_STABLE_3H:
                 trend = 'rising'
-            elif change_3h_extrapolated < -self.PRESSURE_TREND_THRESHOLD_3H:
+            elif change_3h_extrapolated < -self.PRESSURE_TREND_STABLE_3H:
                 trend = 'falling'
             else:
                 trend = 'stable'
@@ -1459,6 +1497,8 @@ class WeatherClient:
         # vilket gjorde att trenden aldrig byggdes upp i SMHI-läge
         if 'pressure' in combined:
             self.save_pressure_measurement(combined['pressure'], source=combined.get('pressure_source', 'unknown'))
+            # Tryckord för nivån (Storm/Regn/Ostadigt/Vackert/Mycket Torrt)
+            combined['pressure_level_text'] = self.describe_pressure_level(combined['pressure'])
 
         # ============================================
         # NEDERBÖRD: NETATMO RAIN GAUGE prioriterat HÖGST!
@@ -1609,13 +1649,8 @@ class WeatherClient:
 
         # Lägg till trend-beskrivning för display - NU MED TILDE FÖR PRELIMINÄR
         if pressure_trend['trend'] in ['rising', 'falling', 'stable']:
-            # Bastext för trend
-            trend_texts = {
-                'rising': 'Stigande',
-                'falling': 'Fallande',
-                'stable': 'Stabilt'
-            }
-            base_text = trend_texts[pressure_trend['trend']]
+            # Femgradigt trendord enligt pressure-descriptions.md
+            base_text = self.describe_pressure_trend(pressure_trend.get('change_3h') or 0.0)
 
             # NYTT: Lägg till tilde (~) för preliminär trend
             if pressure_trend.get('is_preliminary', False):
