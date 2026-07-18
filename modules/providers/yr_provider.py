@@ -248,9 +248,10 @@ class YRWeatherProvider(WeatherProvider):
                     data['weather_symbol'] = data['symbol_code']  # For compatibility
                     data['precipitation'] = details.get('precipitation_amount', 0.0)
             
-            # Tomorrow's 12:00 forecast
-            now = datetime.now(timezone.utc)
-            tomorrow_noon = now.replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            # Tomorrow's 12:00 forecast - kl 12 LOKAL tid, inte UTC
+            # (API-tiderna är UTC; jämförelsen nedan är tz-medveten så subtraktionen blir rätt)
+            local_now = datetime.now().astimezone()
+            tomorrow_noon = local_now.replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
             
             tomorrow_data = {}
             for forecast in timeseries:

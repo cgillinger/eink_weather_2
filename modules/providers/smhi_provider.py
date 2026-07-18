@@ -285,12 +285,13 @@ class SMHIWeatherProvider(WeatherProvider):
             
             # Find tomorrow's 12:00 forecast
             tomorrow_forecast = None
-            now = datetime.now()
+            tomorrow = datetime.now() + timedelta(days=1)
             for forecast in time_series:
                 forecast_time = datetime.fromisoformat(forecast['time'].replace('Z', '+00:00'))
-                tomorrow = now + timedelta(days=1)
-                if (forecast_time.date() == tomorrow.date() and
-                    forecast_time.hour == 12):
+                # API-tider är UTC - jämför i lokal tid, annars visas 14:00-prognosen (CEST) som "kl 12"
+                local_time = forecast_time.astimezone()
+                if (local_time.date() == tomorrow.date() and
+                    local_time.hour == 12):
                     tomorrow_forecast = forecast
                     break
             

@@ -21,6 +21,7 @@ import json
 import time
 import io
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
 from PIL import Image, ImageDraw, ImageFont
@@ -84,6 +85,9 @@ class EPaperWeatherWeb:
         # Cache för senaste rendered image
         self.latest_image = None
         self.latest_weather_data = None
+
+        # Flask kör threaded=True: canvas/draw delas mellan trådar och måste låsas
+        self.render_lock = threading.Lock()
 
         self.logger.info("🌐 E-Paper Weather Web initialiserad")
         self.logger.info(f"📐 Canvas storlek: {self.width}×{self.height} (landscape)")
@@ -231,6 +235,27 @@ class EPaperWeatherWeb:
         Rendera ny bild
         ÅTERANVÄNDER render_and_display() logik från main_daemon.py
         """
+        # Hela renderingen under lås: parallella requests (threaded=True) kan annars
+        # byta ut self.canvas/self.draw mitt i modul-loopen och ge ihopblandade bilder
+        with self.render_lock:
+            return self._render_locked()
+
+    def background_update_loop(self):
+        """
+        Bakgrundsrendering: håller bilden färsk och tryckhistoriken växande
+        även när ingen tittar. Utan detta byggs 3h-trycktrenden aldrig upp.
+        """
+        interval = self.config.get('update_intervals', {}).get('web_render_seconds', 600)
+        self.logger.info(f"🔄 Bakgrundsrendering startad (var {interval}:e sekund)")
+        while True:
+            time.sleep(interval)
+            try:
+                self.render_and_update()
+            except Exception as e:
+                self.logger.error(f"❌ Fel i bakgrundsrendering: {e}")
+
+    def _render_locked(self):
+        """Själva renderingen. Anropas alltid med render_lock hållet."""
         try:
             # Hämta väderdata
             weather_data = self.fetch_weather_data()
@@ -550,9 +575,20 @@ class EPaperWeatherWeb:
             # Rendera ny bild om ingen finns
             self.render_and_update()
 
+        # Lokal referens: latest_image kan bytas ut av en annan tråd mitt i save
+        image = self.latest_image
+        if image is None:
+            # Rendering misslyckades (t.ex. väder-API nere) - servera placeholder
+            # istället för att krascha med AttributeError → 500
+            image = Image.new('RGB', (self.width, self.height), (255, 255, 255))
+            draw = ImageDraw.Draw(image)
+            draw.text((40, self.height // 2 - 20),
+                      "Väderdata ej tillgänglig ännu - försöker igen...",
+                      font=self.fonts.get('medium_desc'), fill=(0, 0, 0))
+
         # Konvertera till PNG bytes
         img_io = io.BytesIO()
-        self.latest_image.save(img_io, 'PNG')
+        image.save(img_io, 'PNG')
         img_io.seek(0)
         return img_io
 
@@ -585,7 +621,12 @@ def weather_image():
     """Servera aktuell väderbild som PNG"""
     try:
         img_bytes = weather_web.get_image_bytes()
-        return send_file(img_bytes, mimetype='image/png')
+        response = send_file(img_bytes, mimetype='image/png')
+        # Utan no-cache visar webbläsaren en gammal cachad bild när appen öppnas
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     except Exception as e:
         app.logger.error(f"❌ Fel vid bildservering: {e}")
         return "Error generating image", 500
@@ -622,6 +663,9 @@ def main():
     # Rendera första bilden
     print("\n🎨 Renderar initial väderbild...")
     weather_web.render_and_update()
+
+    # Bakgrundstråd: kontinuerlig rendering + tryckhistorik även utan besökare
+    threading.Thread(target=weather_web.background_update_loop, daemon=True).start()
 
     # Starta Flask server
     print("\n🚀 Startar web server på http://0.0.0.0:8037")
