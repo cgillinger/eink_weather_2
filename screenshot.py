@@ -23,12 +23,14 @@ def find_daemon_pid():
     Antagande: daemonen körs som python3.
     """
     try:
+        # pgrep -f matchar på kommandoraden: träffar bara main_daemon.py.
+        # "pidof python3" tog blint första python3-processen - kunde skicka
+        # signalen till helt fel process (t.ex. web_server.py)
         output = subprocess.check_output(
-            ["pidof", "python3"],
+            ["pgrep", "-f", "main_daemon.py"],
             text=True
         ).strip()
 
-        # Ta första PID (daemonen)
         return int(output.split()[0])
 
     except subprocess.CalledProcessError:

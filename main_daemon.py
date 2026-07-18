@@ -30,6 +30,7 @@ import json
 import time
 import re
 import signal
+import threading
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Any
@@ -37,7 +38,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 # Lägg till projektets moduler
 sys.path.append('modules')
-sys.path.append(os.path.join(os.path.dirname(__file__), 'e-Paper', 'RaspberryPi_JetsonNano', 'python', 'lib'))
+# insert(0), inte append: projektroten (sys.path[0]) innehåller en stub av
+# waveshare_epd som annars alltid vinner över den riktiga vendor-drivrutinen
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'e-Paper', 'RaspberryPi_JetsonNano', 'python', 'lib'))
 
 from weather_client import WeatherClient
 from icon_manager import WeatherIconManager
@@ -533,9 +536,17 @@ class EPaperWeatherDaemon:
         self.canvas = Image.new('1', (self.width, self.height), 255)
         self.draw = ImageDraw.Draw(self.canvas)
 
+        # Avbrytbar väntan i huvudloopen: time.sleep() släpper inte igenom
+        # signaler (PEP 475), så shutdown kunde ta en hel intervall
+        self.wake_event = threading.Event()
+        self.screenshot_requested = False
+
         # Setup signal handlers för graceful shutdown
         signal.signal(signal.SIGTERM, self.signal_handler)
         signal.signal(signal.SIGINT, self.signal_handler)
+        # SIGUSR1 = skärmdumpsbegäran från screenshot.py; utan handler DÖDAR
+        # signalen processen (OS-default)
+        signal.signal(signal.SIGUSR1, self.screenshot_signal_handler)
 
         self.logger.info("🌤️ E-Paper Weather Daemon initialiserad med PRECIPITATION FIX")
         self.logger.info("🎨 Precipitation module använder nu PrecipitationRenderer via ModuleFactory")
@@ -545,6 +556,23 @@ class EPaperWeatherDaemon:
         """Hantera shutdown signals"""
         self.logger.info(f"📶 Signal {signum} mottagen - avslutar daemon...")
         self.running = False
+        self.wake_event.set()
+
+    def screenshot_signal_handler(self, signum, frame):
+        """SIGUSR1 från screenshot.py: spara aktuell canvas vid nästa loopvarv"""
+        self.screenshot_requested = True
+        self.wake_event.set()
+
+    def save_screenshot(self):
+        """Spara aktuell canvas som PNG (begärs via SIGUSR1)"""
+        try:
+            os.makedirs('screenshots', exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            path = os.path.join('screenshots', f'epaper_{timestamp}.png')
+            self.canvas.convert('RGB').save(path)
+            self.logger.info(f"📸 Skärmdump sparad: {path}")
+        except Exception as e:
+            self.logger.error(f"❌ Skärmdump misslyckades: {e}")
 
     def load_config(self, config_path):
         """Ladda JSON-konfiguration"""
@@ -576,6 +604,14 @@ class EPaperWeatherDaemon:
     def init_display(self):
         """Initialisera E-Paper display"""
         try:
+            if getattr(epd4in26, 'IS_STUB', False) and not self.config['debug']['test_mode']:
+                self.logger.error(
+                    "❌ Stub-drivrutinen laddades istället för riktig Waveshare-drivrutin "
+                    "- skärmen skulle aldrig uppdateras. Installera vendor-biblioteket i "
+                    "e-Paper/RaspberryPi_JetsonNano/python/lib/waveshare_epd/"
+                )
+                sys.exit(1)
+            self.logger.info(f"🖥️ EPD-drivrutin: {epd4in26.__file__}")
             self.logger.info("📱 Initialiserar E-Paper display för daemon...")
             self.epd = epd4in26.EPD()
             self.epd.init()
@@ -1170,9 +1206,10 @@ class EPaperWeatherDaemon:
             self.draw.line([(x + 2, y + height - 2), (x + width - 2, y + height - 2)], fill=0, width=1)
             self.draw.line([(x + 8, y + 8), (x + 20, y + 8)], fill=0, width=1)
             self.draw.line([(x + 8, y + 8), (x + 8, y + 20)], fill=0, width=1)
-        elif module_name == 'precipitation_module':
+        elif module_name in ['precipitation_module', 'wind_module']:
             # FIXAT: BARA RAMAR - INGET HÅRDKODAD INNEHÅLL!
-            # Innehållet renderas av PrecipitationRenderer via ModuleFactory
+            # Innehållet renderas av Precipitation-/WindRenderer via ModuleFactory
+            # (wind_module saknade tidigare ram helt, till skillnad från main_web)
             self.draw.line([(x, y), (x + width, y)], fill=0, width=2)
             self.draw.line([(x, y), (x, y + height)], fill=0, width=2)
             self.draw.line([(x, y + height), (x + width, y + height)], fill=0, width=2)
@@ -1251,6 +1288,11 @@ class EPaperWeatherDaemon:
                 iteration += 1
                 self.logger.debug(f"🔄 Daemon iteration #{iteration}")
 
+                # Skärmdumpsbegäran via SIGUSR1
+                if self.screenshot_requested:
+                    self.screenshot_requested = False
+                    self.save_screenshot()
+
                 try:
                     # Hämta väderdata
                     weather_data = self.fetch_weather_data()
@@ -1277,9 +1319,11 @@ class EPaperWeatherDaemon:
                 except Exception as e:
                     self.logger.error(f"❌ Fel i daemon iteration #{iteration}: {e}")
 
-                # Vänta till nästa iteration
+                # Vänta till nästa iteration - avbrytbart av signaler
+                # (time.sleep släpper inte igenom signalavbrott, PEP 475)
                 if self.running:
-                    time.sleep(self.update_interval)
+                    self.wake_event.wait(self.update_interval)
+                    self.wake_event.clear()
 
         except KeyboardInterrupt:
             self.logger.info("⚠️ Daemon avbruten av användare")
@@ -1290,6 +1334,11 @@ class EPaperWeatherDaemon:
 
     def cleanup(self):
         """Cleanup vid shutdown"""
+        # Anropas från både run_daemon():s och main():s finally - kör bara en
+        # gång (dubbel epd.sleep() mot redan sovande panel är oförutsägbart)
+        if getattr(self, '_cleanup_done', False):
+            return
+        self._cleanup_done = True
         try:
             if self.epd:
                 self.epd.sleep()
