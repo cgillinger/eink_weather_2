@@ -209,6 +209,9 @@ class WeatherClient:
             if observations_data:
                 observations_data['station_id'] = self.alternative_station_id
                 observations_data['station_name'] = 'Arlanda (alternativ)'
+                # Cacha även fallback-resultatet - annars görs primär+fallback-anrop
+                # på varje uppdatering så länge primärstationen är nere
+                self.observations_cache = {'data': observations_data, 'timestamp': time.time()}
                 self.logger.info(f"✅ SMHI Observations från alternativ station: {observations_data.get('precipitation_observed', 0)}mm/h")
                 return observations_data
 
@@ -616,7 +619,7 @@ class WeatherClient:
                 try:
                     # SNOW1gv1 flat data object
                     d = forecast.get('data', {})
-                    precipitation = float(d.get('precipitation_amount_min', 0.0))
+                    precipitation = float(d.get('precipitation_amount_mean', d.get('precipitation_amount_min', 0.0)))
                     precip_type = int(d.get('predominant_precipitation_type_at_surface', 0))
 
                     # DEBUGGING: Logga varje prognos
@@ -1075,8 +1078,8 @@ class WeatherClient:
 
             data = response.json()
 
-            # Nuvarande UV
-            current_uv = data.get('now', {}).get('uvi', 0)
+            # Nuvarande UV ("or 0": API:et kan skicka explicit null)
+            current_uv = data.get('now', {}).get('uvi', 0) or 0
 
             # Max UV från prognos (dagens peak)
             max_uv = current_uv
@@ -1084,14 +1087,15 @@ class WeatherClient:
 
             if 'forecast' in data and isinstance(data['forecast'], list):
                 for forecast in data['forecast']:
-                    forecast_uv = forecast.get('uvi', 0)
+                    forecast_uv = forecast.get('uvi', 0) or 0
                     if forecast_uv > max_uv:
                         max_uv = forecast_uv
                         try:
                             forecast_time = datetime.fromisoformat(forecast['hour'].replace('Z', '+00:00'))
-                            peak_hour = forecast_time.hour
-                        except:
-                            pass
+                            # API-tider är UTC - visa peak-timmen i lokal tid
+                            peak_hour = forecast_time.astimezone().hour
+                        except (KeyError, ValueError, TypeError) as e:
+                            self.logger.debug(f"☀️ Kunde inte tolka UV-prognostid: {e}")
 
             # Klassificera risknivå (svensk standard)
             risk_level, risk_text = self._classify_uv_risk(max_uv)
@@ -1123,6 +1127,13 @@ class WeatherClient:
             return {}
         except Exception as e:
             self.logger.error(f"❌ UV parsningsfel: {e}")
+
+            # Samma cache-fallback som vid nätverksfel - annars försvinner
+            # all UV-data vid ett enstaka trasigt API-svar
+            if self.uv_cache['data']:
+                self.logger.info("☀️ Använder gammal UV-cache som fallback")
+                return self.uv_cache['data']
+
             return {}
 
     def _classify_uv_risk(self, uv_index: float) -> tuple:
@@ -1283,7 +1294,10 @@ class WeatherClient:
                 self.logger.info(f"💨 VINDBYAR hämtad från SMHI: {d['wind_speed_of_gust']} m/s")
             if 'air_pressure_at_mean_sea_level' in d:
                 data['pressure'] = round(d['air_pressure_at_mean_sea_level'], 0)
-            if 'precipitation_amount_min' in d:
+            # mean, inte min: min är ensemblens mest optimistiska värde
+            if 'precipitation_amount_mean' in d:
+                data['precipitation'] = d['precipitation_amount_mean']
+            elif 'precipitation_amount_min' in d:
                 data['precipitation'] = d['precipitation_amount_min']
             if 'predominant_precipitation_type_at_surface' in d:
                 data['precipitation_type'] = d['predominant_precipitation_type_at_surface']
@@ -1303,7 +1317,9 @@ class WeatherClient:
                 tomorrow_data['wind_direction'] = float(d['wind_from_direction'])
             if 'wind_speed_of_gust' in d:
                 tomorrow_data['wind_gust'] = d['wind_speed_of_gust']
-            if 'precipitation_amount_min' in d:
+            if 'precipitation_amount_mean' in d:
+                tomorrow_data['precipitation'] = d['precipitation_amount_mean']
+            elif 'precipitation_amount_min' in d:
                 tomorrow_data['precipitation'] = d['precipitation_amount_min']
             if 'predominant_precipitation_type_at_surface' in d:
                 tomorrow_data['precipitation_type'] = d['predominant_precipitation_type_at_surface']
@@ -1452,8 +1468,10 @@ class WeatherClient:
 
         # STEG 1: Försök använda Netatmo Rain Gauge (HÖGSTA PRIORITET)
         if netatmo_data and 'rain' in netatmo_data:
-            # Kontrollera att regndata är färsk (max 10 min gammal)
-            rain_age = netatmo_data.get('rain_age_minutes', 0)
+            # Kontrollera att regndata är färsk (max 10 min gammal).
+            # Okänd ålder (999) ska INTE behandlas som färskast möjliga -
+            # då används fallback (Observations/Prognos) istället
+            rain_age = netatmo_data.get('rain_age_minutes', 999)
 
             if rain_age <= 10:
                 # ANVÄND NETATMO RAIN GAUGE
