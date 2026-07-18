@@ -33,9 +33,18 @@ def force_stop_daemon():
     try:
         # Döda alla main_daemon.py processer
         subprocess.run("sudo pkill -f main_daemon.py", shell=True, timeout=5)
-        time.sleep(2)
-        print("✅ Daemon-processer stoppade")
-        return True
+        # Vänta tills processen faktiskt dött istället för att anta att
+        # 2 sekunder räcker - annars kan en ny instans startas medan den
+        # gamla fortfarande håller SPI/GPIO
+        for _ in range(15):
+            time.sleep(1)
+            check = subprocess.run("pgrep -f main_daemon.py", shell=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if check.returncode != 0:
+                print("✅ Daemon-processer stoppade")
+                return True
+        print("❌ Daemon-processer kör fortfarande efter 15 s")
+        return False
     except Exception as e:
         print(f"❌ Kunde inte tvinga stopp: {e}")
         return False

@@ -21,8 +21,10 @@ from typing import Dict
 from PIL import Image, ImageDraw, ImageFont
 import logging
 
-# Lägg till Waveshare biblioteket i path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'e-Paper', 'RaspberryPi_JetsonNano', 'python', 'lib'))
+# Lägg till Waveshare biblioteket i path.
+# insert(0), inte append: projektroten (sys.path[0]) innehåller en stub av
+# waveshare_epd som annars alltid vinner över den riktiga vendor-drivrutinen
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'e-Paper', 'RaspberryPi_JetsonNano', 'python', 'lib'))
 
 # Lägg till modules-mappen
 sys.path.append('modules')
@@ -281,10 +283,20 @@ class EPaperWeatherApp:
     def init_display(self):
         """Initialisera E-Paper display"""
         try:
+            if getattr(epd4in26, 'IS_STUB', False) and not self.config['debug']['test_mode']:
+                self.logger.error(
+                    "❌ Stub-drivrutinen laddades istället för riktig Waveshare-drivrutin "
+                    "- skärmen skulle aldrig uppdateras. Installera vendor-biblioteket i "
+                    "e-Paper/RaspberryPi_JetsonNano/python/lib/waveshare_epd/"
+                )
+                sys.exit(1)
             self.logger.info("📱 Initialiserar E-Paper display...")
             self.epd = epd4in26.EPD()
             self.epd.init()
-            self.epd.Clear()
+            # OBS: ingen epd.Clear() här - den blankade skärmen vid VARJE
+            # cron-körning, även när smart-logiken sedan beslöt att inte rita
+            # något (skärmen blev vit tills nästa faktiska uppdatering).
+            # Clear görs nu i display_canvas() precis före en riktig uppdatering.
             self.logger.info("✅ E-Paper display redo")
         except Exception as e:
             self.logger.error(f"❌ E-Paper display-fel: {e}")
@@ -841,6 +853,8 @@ class EPaperWeatherApp:
             if self.epd and not self.config['debug']['test_mode']:
                 if force_update:
                     self.logger.info(f"📱 UPPDATERAR E-Paper display: {update_reason}")
+                    # Clear precis före uppdatering (flyttad från init_display)
+                    self.epd.Clear()
                     self.epd.display(self.epd.getbuffer(self.canvas))
                     self.logger.info("✅ E-Paper display uppdaterad")
                 else:
