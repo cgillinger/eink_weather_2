@@ -64,35 +64,40 @@
         var img = document.getElementById('weather-image');
         var spinner = document.getElementById('spinner');
         var isReloading = false;
+        var watchdog = null;
 
+        function done() {
+            img.classList.remove('loading');
+            spinner.classList.remove('visible');
+            isReloading = false;
+            if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+        }
+
+        // Hämta senaste bilden (servern renderar i bakgrunden - detta är billigt)
+        function refreshImage() {
+            img.src = '/weather.png?t=' + Date.now();
+        }
+
+        // Manuell refresh (klick/touch): tvinga servern att rendera om, hämta sedan bilden.
+        // Watchdog ser till att isReloading aldrig fastnar om requesten hänger -
+        // tidigare kunde en hängd fetch blockera all framtida refresh permanent.
         function reload() {
             if (isReloading) return;
             isReloading = true;
             img.classList.add('loading');
             spinner.classList.add('visible');
+            watchdog = setTimeout(done, 45000);
 
-            fetch('/api/refresh', { method: 'POST' })
-            .then(function() {
-                setTimeout(function() {
-                    img.src = '/weather.png?t=' + Date.now();
-                }, 500);
-            })
-            .catch(function() {
-                img.src = '/weather.png?t=' + Date.now();
-            });
+            var controller = new AbortController();
+            var timeout = setTimeout(function() { controller.abort(); }, 30000);
+
+            fetch('/api/refresh', { method: 'POST', signal: controller.signal })
+            .then(function() { clearTimeout(timeout); refreshImage(); })
+            .catch(function() { clearTimeout(timeout); refreshImage(); });
         }
 
-        img.onload = function() {
-            img.classList.remove('loading');
-            spinner.classList.remove('visible');
-            isReloading = false;
-        };
-
-        img.onerror = function() {
-            img.classList.remove('loading');
-            spinner.classList.remove('visible');
-            isReloading = false;
-        };
+        img.onload = done;
+        img.onerror = done;
 
         // Click för desktop
         container.addEventListener('click', reload);
@@ -103,8 +108,16 @@
             reload();
         });
 
-        // Auto-refresh var 60:e sekund
-        setInterval(reload, 60000);
+        // Färsk bild direkt vid öppning (initial src är ?t=0 och kan vara cachad)
+        refreshImage();
+
+        // Färsk bild när appen kommer tillbaka i förgrunden (iOS home screen-app)
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) refreshImage();
+        });
+
+        // Auto-refresh var 60:e sekund (bara bildhämtning - servern renderar själv)
+        setInterval(refreshImage, 60000);
     </script>
 </body>
 </html>

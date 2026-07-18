@@ -32,6 +32,7 @@ import json
 import time
 import logging
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Any
 
@@ -92,6 +93,8 @@ class WeatherClient:
 
         # NYTT: Tryckhistorik för 3-timmars tendenser (meteorologisk standard)
         self.pressure_history_file = "cache/pressure_history.json"
+        self.pressure_history_lock = threading.Lock()  # Flask threaded=True: skydda fil-I/O
+        self.PRESSURE_SAVE_MIN_INTERVAL_MINUTES = 5  # Spara max en mätning per 5 min
         self.ensure_cache_directory()
 
         # NYTT: CYKEL-VÄDER konstanter
@@ -283,35 +286,60 @@ class WeatherClient:
             source: Datakälla (netatmo/smhi)
         """
         try:
-            # Läs befintlig historik
-            history = []
-            if os.path.exists(self.pressure_history_file):
-                with open(self.pressure_history_file, 'r') as f:
-                    history = json.load(f)
+            with self.pressure_history_lock:
+                history = self._read_pressure_history()
 
-            # Lägg till ny mätning
-            timestamp = datetime.now().isoformat()
-            history.append({
-                'timestamp': timestamp,
-                'pressure': pressure,
-                'source': source
-            })
+                # Dedupe: hoppa över om senaste mätningen är för färsk
+                if history:
+                    try:
+                        last_time = datetime.fromisoformat(history[-1]['timestamp'])
+                        age_minutes = (datetime.now() - last_time).total_seconds() / 60
+                        if age_minutes < self.PRESSURE_SAVE_MIN_INTERVAL_MINUTES:
+                            self.logger.debug(f"📊 Tryck-mätning skippad (senaste är {age_minutes:.1f} min gammal)")
+                            return
+                    except (KeyError, ValueError):
+                        pass
 
-            # Behåll bara senaste 24 timmarna
-            cutoff_time = datetime.now() - timedelta(hours=24)
-            history = [
-                entry for entry in history
-                if datetime.fromisoformat(entry['timestamp']) > cutoff_time
-            ]
+                # Lägg till ny mätning
+                timestamp = datetime.now().isoformat()
+                history.append({
+                    'timestamp': timestamp,
+                    'pressure': pressure,
+                    'source': source
+                })
 
-            # Spara uppdaterad historik
-            with open(self.pressure_history_file, 'w') as f:
-                json.dump(history, f, indent=2)
+                # Behåll bara senaste 24 timmarna
+                cutoff_time = datetime.now() - timedelta(hours=24)
+                history = [
+                    entry for entry in history
+                    if datetime.fromisoformat(entry['timestamp']) > cutoff_time
+                ]
+
+                # Atomär skrivning: temp-fil + rename så en läsare aldrig ser en halvskriven fil
+                tmp_file = self.pressure_history_file + '.tmp'
+                with open(tmp_file, 'w') as f:
+                    json.dump(history, f, indent=2)
+                os.replace(tmp_file, self.pressure_history_file)
 
             self.logger.debug(f"📊 Tryck-mätning sparad: {pressure} hPa från {source}")
 
         except Exception as e:
             self.logger.error(f"❌ Fel vid sparande av tryckhistorik: {e}")
+
+    def _read_pressure_history(self) -> list:
+        """
+        Läs tryckhistorik med självläkning: en korrupt fil får inte
+        blockera all framtida insamling — då börjar vi om från tom historik.
+        Anropas med pressure_history_lock hållet.
+        """
+        if not os.path.exists(self.pressure_history_file):
+            return []
+        try:
+            with open(self.pressure_history_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError) as e:
+            self.logger.warning(f"⚠️ Korrupt tryckhistorik ({e}) - börjar om med tom historik")
+            return []
 
     def calculate_3h_pressure_trend(self) -> Dict[str, Any]:
         """
@@ -328,7 +356,11 @@ class WeatherClient:
             Dict med trend-information inkl. is_preliminary flagga
         """
         try:
-            if not os.path.exists(self.pressure_history_file):
+            # Läs historik (trådsäkert, självläkande vid korrupt fil)
+            with self.pressure_history_lock:
+                history = self._read_pressure_history()
+
+            if not history:
                 return {
                     'trend': 'insufficient_data',
                     'change': 0.0,
@@ -337,10 +369,6 @@ class WeatherClient:
                     'is_preliminary': False,
                     'reason': 'Ingen historik ännu'
                 }
-
-            # Läs historik
-            with open(self.pressure_history_file, 'r') as f:
-                history = json.load(f)
 
             if len(history) < 2:
                 return {
@@ -857,9 +885,7 @@ class WeatherClient:
             # Parsea sensor-data (nu inkl. Rain Gauge)
             netatmo_data = self.parse_netatmo_stations(stations_data)
 
-            # NYTT: Spara tryck för 3-timmars trend-analys
-            if netatmo_data and 'pressure' in netatmo_data:
-                self.save_pressure_measurement(netatmo_data['pressure'], source="netatmo")
+            # Trycksparning sker nu i combine_weather_data() oavsett källa (netatmo/smhi)
 
             if netatmo_data:
                 # Uppdatera cache
@@ -1412,6 +1438,11 @@ class WeatherClient:
         elif smhi_data and 'pressure' in smhi_data:
             combined['pressure'] = smhi_data['pressure']
             combined['pressure_source'] = 'smhi'
+
+        # Spara tryck för 3h-trend oavsett källa - tidigare sparades bara Netatmo-tryck,
+        # vilket gjorde att trenden aldrig byggdes upp i SMHI-läge
+        if 'pressure' in combined:
+            self.save_pressure_measurement(combined['pressure'], source=combined.get('pressure_source', 'unknown'))
 
         # ============================================
         # NEDERBÖRD: NETATMO RAIN GAUGE prioriterat HÖGST!

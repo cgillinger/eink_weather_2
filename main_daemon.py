@@ -28,6 +28,7 @@ import sys
 import os
 import json
 import time
+import re
 import signal
 import logging
 from datetime import datetime, timedelta
@@ -136,10 +137,12 @@ class TriggerEvaluator:
             allowed_chars = set('0123456789.<>=!() ')
             allowed_words = {'AND', 'OR', 'NOT', 'True', 'False'}
 
-            # Ersätt logiska operatorer med Python syntax
-            expression = expression.replace(' AND ', ' and ')
-            expression = expression.replace(' OR ', ' or ')
-            expression = expression.replace(' NOT ', ' not ')
+            # Ersätt logiska operatorer med Python syntax.
+            # Ordgränser (\b) krävs: kravet på omgivande mellanslag gjorde att
+            # uttryck som BÖRJAR med "NOT ..." aldrig konverterades → eval-syntaxfel → alltid False
+            expression = re.sub(r'\bAND\b', 'and', expression)
+            expression = re.sub(r'\bOR\b', 'or', expression)
+            expression = re.sub(r'\bNOT\b', 'not', expression)
 
             # Kontrollera att endast säkra tokens används
             tokens = expression.split()
@@ -265,6 +268,11 @@ class DynamicModuleManager:
                 reverse=True  # Högsta priority först
             )
 
+            # Sektioner som redan avgjorts av en aktiv trigger med högre prioritet.
+            # Utan denna spärr skrev VARJE efterföljande aktiv trigger över sektionen,
+            # så lägst prioritet vann - tvärtemot avsedd semantik.
+            claimed_sections = set()
+
             for trigger_name, trigger_config in triggers_by_priority:
                 try:
                     condition = trigger_config.get('condition', '')
@@ -275,10 +283,15 @@ class DynamicModuleManager:
                         self.logger.warning(f"⚠️ Ofullständig trigger config: {trigger_name}")
                         continue
 
+                    if target_section in claimed_sections:
+                        self.logger.debug(f"🎯 Trigger {trigger_name} skippad: {target_section} redan avgjord av högre prioritet")
+                        continue
+
                     # Evaluera condition
                     if self.trigger_evaluator.evaluate_condition(condition, context_data):
                         # Trigger är aktiv → aktivera group
                         active_groups[target_section] = activate_group
+                        claimed_sections.add(target_section)
                         self.logger.info(f"🎯 Trigger aktiverad: {trigger_name} → {target_section}.{activate_group}")
                     else:
                         self.logger.debug(f"🎯 Trigger inaktiv: {trigger_name}")
